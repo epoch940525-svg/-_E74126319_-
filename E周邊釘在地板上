@@ -1,0 +1,188 @@
+from compas.datastructures import Mesh
+from compas.geometry import Point
+from compas_viewer import Viewer
+
+import math
+import copy
+
+
+
+# PARAMETERS
+
+OUTER_SIZE = 10.0
+INNER_SIZE = 4.0
+NX = 70
+NY = 70
+
+HOUSE_SIZE = 1.0
+HOUSE_Z0 = 0.0
+
+RING_THICKNESS = HOUSE_SIZE / 5.0   # 0.2 (if house=1.0)
+
+# 3 noise points
+Ps = [
+    (4.5, 0.0, 0.0),
+    (-2.5, 3.2, 0.0),
+    (0.0, -4.0, 0.0),
+]
+
+noise_level = 1.0
+radius = 2.5
+max_raise = 1.0
+
+# GEOMETRY BUILDERS
+
+def make_square_ring_mesh(outer=10.0, inner=4.0, nx=70, ny=70):
+    ox = outer * 0.5
+    oy = outer * 0.5
+    hx = inner * 0.5
+    hy = inner * 0.5
+
+    vertices = []
+    for j in range(ny + 1):
+        y = -oy + (2.0 * oy) * (j / ny)
+        for i in range(nx + 1):
+            x = -ox + (2.0 * ox) * (i / nx)
+            vertices.append([x, y, 0.0])
+
+    faces = []
+    for j in range(ny):
+        for i in range(nx):
+            a = i + j * (nx + 1)
+            b = a + 1
+            c = b + (nx + 1)
+            d = a + (nx + 1)
+            faces.append([a, b, c, d])
+
+    kept_faces = []
+    for f in faces:
+        cx = sum(vertices[k][0] for k in f) / 4.0
+        cy = sum(vertices[k][1] for k in f) / 4.0
+        inside_hole = (abs(cx) < hx) and (abs(cy) < hy)
+        if not inside_hole:
+            kept_faces.append(f)
+
+    used = sorted({k for f in kept_faces for k in f})
+    remap = {old: new for new, old in enumerate(used)}
+    new_vertices = [vertices[i] for i in used]
+    new_faces = [[remap[k] for k in f] for f in kept_faces]
+
+    return Mesh.from_vertices_and_faces(new_vertices, new_faces)
+
+
+def make_box_mesh(size=1.0, z0=0.0):
+    s = size * 0.5
+    z1 = z0 + size
+    vertices = [
+        [-s, -s, z0], [ s, -s, z0], [ s,  s, z0], [-s,  s, z0],
+        [-s, -s, z1], [ s, -s, z1], [ s,  s, z1], [-s,  s, z1],
+    ]
+    faces = [
+        [0, 1, 2, 3],
+        [4, 5, 6, 7],
+        [0, 1, 5, 4],
+        [1, 2, 6, 5],
+        [2, 3, 7, 6],
+        [3, 0, 4, 7],
+    ]
+    return Mesh.from_vertices_and_faces(vertices, faces)
+
+# DEFORMATION (3 points additive)
+
+def raise_ring_multi(ring, Ps, radius=2.5, max_raise=1.0, noise_level=1.0):
+    r = float(radius)
+    if r <= 0:
+        return ring
+
+    for vkey in ring.vertices():
+        x, y, z0 = ring.vertex_coordinates(vkey)
+        dz_sum = 0.0
+
+        for (px, py, pz) in Ps:
+            dx = x - px
+            dy = y - py
+            d = math.sqrt(dx * dx + dy * dy)
+
+            if d < r:
+                t = 1.0 - (d / r)  # linear falloff
+                dz_sum += t * max_raise * noise_level
+
+        ring.vertex_attribute(vkey, "z", z0 + dz_sum)
+
+    return ring
+
+
+# THICKENING (FLAT BOTTOM + STRETCHED SIDES)
+
+def thicken_ring_to_solid_flat_bottom(ring_top, ring_base, thickness):
+
+    t = float(thickness)
+    if t <= 0:
+        return ring_top
+
+    solid = Mesh()
+
+    # 1) top vertices (deformed)
+    top_map = {}
+    for v in ring_top.vertices():
+        x, y, z = ring_top.vertex_coordinates(v)
+        top_map[v] = solid.add_vertex(x=x, y=y, z=z)
+
+    # 2) bottom vertices (flat) -> from ring_base, then -t
+    bot_map = {}
+    for v in ring_base.vertices():
+        x, y, z = ring_base.vertex_coordinates(v)  # z 應該是 0
+        bot_map[v] = solid.add_vertex(x=x, y=y, z=z - t)
+
+    # 3) top faces
+    for f in ring_top.faces():
+        face = ring_top.face_vertices(f)
+        solid.add_face([top_map[v] for v in face])
+
+    # 4) bottom faces (reverse winding)
+    for f in ring_base.faces():
+        face = ring_base.face_vertices(f)
+        solid.add_face([bot_map[v] for v in reversed(face)])
+
+    # 5) side walls along boundary edges (topology same, use base boundary)
+    for u, v in ring_base.edges():
+        f1 = ring_base.halfedge[u][v]
+        f2 = ring_base.halfedge[v][u]
+        if f1 is None or f2 is None:
+            solid.add_face([top_map[u], top_map[v], bot_map[v], bot_map[u]])
+
+    return solid
+
+# BUILD
+
+ring_base = make_square_ring_mesh(outer=OUTER_SIZE, inner=INNER_SIZE, nx=NX, ny=NY)
+
+# ring_top = deformed copy of base
+ring_top = copy.deepcopy(ring_base)
+ring_top = raise_ring_multi(
+    ring_top,
+    Ps=Ps,
+    radius=radius,
+    max_raise=max_raise,
+    noise_level=noise_level
+)
+
+ring_solid = thicken_ring_to_solid_flat_bottom(ring_top, ring_base, thickness=RING_THICKNESS)
+
+house = make_box_mesh(size=HOUSE_SIZE, z0=HOUSE_Z0)
+
+print("Base ring verts:", ring_base.number_of_vertices(), "faces:", ring_base.number_of_faces())
+print("Top  ring verts:", ring_top.number_of_vertices(), "faces:", ring_top.number_of_faces())
+print("Solid ring verts:", ring_solid.number_of_vertices(), "faces:", ring_solid.number_of_faces())
+print("Thickness:", RING_THICKNESS)
+
+# VIEW
+
+viewer = Viewer()
+viewer.scene.add(ring_solid, name="ring_solid", show_faces=True, show_edges=True)
+viewer.scene.add(house, name="house", show_faces=True, show_edges=True)
+
+for i, P in enumerate(Ps):
+    viewer.scene.add(Point(*P), name=f"noise_{i}")
+
+viewer.show()

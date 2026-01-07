@@ -1,0 +1,206 @@
+from compas.datastructures import Mesh
+from compas.geometry import Point
+from compas_viewer import Viewer
+
+import math
+import copy
+
+
+# =========================================================
+# PARAMETERS
+# =========================================================
+NX = 45
+NY = 45
+
+HOUSE_H = 1.0
+HOUSE_LX = 5.0
+HOUSE_LY = 4.0
+HOUSE_T  = 1.5
+
+GAP = 0.8          # ⭐ 房子與外圍 band 的「距離」
+OFFSET = 3.0       # band 的寬度
+BAND_THICKNESS = HOUSE_H / 5.0
+
+# 主人（凹） / 外人（凸）
+SOURCES = [
+    {"pos": (-3.0,  1.5, 0.0), "type": "press", "radius": 2.8, "amp": 1.0},
+    {"pos": ( 3.5, -2.0, 0.0), "type": "push",  "radius": 2.5, "amp": 1.0},
+]
+
+MAX_RAISE = 1.0
+
+
+# =========================================================
+# L SHAPE HELPERS
+# =========================================================
+def build_L_rects(lx, ly, t, gap=0.0):
+    sx = lx * 0.5
+    sy = ly * 0.5
+
+    rectA = (
+        0 - sx - gap,
+        0 - sy - gap,
+        lx - sx + gap,
+        t - sy + gap
+    )
+
+    rectB = (
+        0 - sx - gap,
+        0 - sy - gap,
+        t - sx + gap,
+        ly - sy + gap
+    )
+
+    return rectA, rectB
+
+
+def expand_rect(rect, d):
+    xmin, ymin, xmax, ymax = rect
+    return (xmin - d, ymin - d, xmax + d, ymax + d)
+
+
+def point_in_rect(x, y, rect):
+    xmin, ymin, xmax, ymax = rect
+    return xmin <= x <= xmax and ymin <= y <= ymax
+
+
+def point_in_union_L(x, y, rA, rB):
+    return point_in_rect(x, y, rA) or point_in_rect(x, y, rB)
+
+
+def bbox_of_union(rects):
+    xs = [r[0] for r in rects] + [r[2] for r in rects]
+    ys = [r[1] for r in rects] + [r[3] for r in rects]
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+# =========================================================
+# BAND MESH (有 GAP 的外圍)
+# =========================================================
+def make_band_mesh_L(lx, ly, t, gap, offset, nx, ny):
+    innerA, innerB = build_L_rects(lx, ly, t, gap=gap)
+    outerA = expand_rect(innerA, offset)
+    outerB = expand_rect(innerB, offset)
+
+    xmin, ymin, xmax, ymax = bbox_of_union([outerA, outerB])
+
+    verts = []
+    for j in range(ny + 1):
+        y = ymin + (ymax - ymin) * j / ny
+        for i in range(nx + 1):
+            x = xmin + (xmax - xmin) * i / nx
+            verts.append([x, y, 0.0])
+
+    faces = []
+    for j in range(ny):
+        for i in range(nx):
+            a = i + j * (nx + 1)
+            b = a + 1
+            c = b + (nx + 1)
+            d = a + (nx + 1)
+            faces.append([a, b, c, d])
+
+    kept = []
+    for f in faces:
+        cx = sum(verts[k][0] for k in f) / 4
+        cy = sum(verts[k][1] for k in f) / 4
+
+        in_outer = point_in_union_L(cx, cy, outerA, outerB)
+        in_inner = point_in_union_L(cx, cy, innerA, innerB)
+
+        if in_outer and not in_inner:
+            kept.append(f)
+
+    used = sorted({k for f in kept for k in f})
+    remap = {old: new for new, old in enumerate(used)}
+
+    new_verts = [verts[i] for i in used]
+    new_faces = [[remap[k] for k in f] for f in kept]
+
+    return Mesh.from_vertices_and_faces(new_verts, new_faces)
+
+
+# =========================================================
+# L HOUSE
+# =========================================================
+def make_L_house_mesh(lx, ly, t, height):
+    sx = lx * 0.5
+    sy = ly * 0.5
+
+    poly = [
+        (0 - sx,   0 - sy),
+        (lx - sx,  0 - sy),
+        (lx - sx,  t - sy),
+        (t - sx,   t - sy),
+        (t - sx,   ly - sy),
+        (0 - sx,   ly - sy),
+    ]
+
+    Vb = [[x, y, 0.0] for x, y in poly]
+    Vt = [[x, y, height] for x, y in poly]
+    V = Vb + Vt
+    n = len(poly)
+
+    F = []
+    F.append(list(reversed(range(n))))
+    F.append(list(range(n, 2*n)))
+
+    for i in range(n):
+        j = (i + 1) % n
+        F.append([i, j, n + j, n + i])
+
+    return Mesh.from_vertices_and_faces(V, F)
+
+
+# =========================================================
+# DEFORMATION (Z only)
+# =========================================================
+def deform_top_Z(mesh, sources):
+    for v in mesh.vertices():
+        x, y, z0 = mesh.vertex_coordinates(v)
+        dz = 0.0
+
+        for src in sources:
+            px, py, _ = src["pos"]
+            r = src["radius"]
+            amp = src["amp"]
+
+            d = math.hypot(x - px, y - py)
+            if d < r:
+                t = 1 - d / r
+                if src["type"] == "push":
+                    dz += t * amp * MAX_RAISE
+                else:
+                    dz -= t * amp * MAX_RAISE
+
+        mesh.vertex_attribute(v, "z", z0 + dz)
+
+    return mesh
+
+
+# =========================================================
+# BUILD
+# =========================================================
+band_base = make_band_mesh_L(
+    HOUSE_LX, HOUSE_LY, HOUSE_T,
+    gap=GAP,
+    offset=OFFSET,
+    nx=NX, ny=NY
+)
+
+band_top = deform_top_Z(copy.deepcopy(band_base), SOURCES)
+house = make_L_house_mesh(HOUSE_LX, HOUSE_LY, HOUSE_T, HOUSE_H)
+
+
+# =========================================================
+# VIEWER (SAFE)
+# =========================================================
+viewer = Viewer()
+
+viewer.scene.add(band_top, name="band", show_faces=True, show_edges=False)
+viewer.scene.add(house, name="house", show_faces=True, show_edges=True)
+
+for i, s in enumerate(SOURCES):
+    viewer.scene.add(Point(*s["pos"]), name=f"src_{i}")
+
+viewer.show()

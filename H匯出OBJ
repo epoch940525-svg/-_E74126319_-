@@ -1,0 +1,257 @@
+from compas.datastructures import Mesh
+import math
+import copy
+import os
+
+
+# =========================================================
+# PARAMETERS
+# =========================================================
+NX = 55
+NY = 55
+
+HOUSE_H = 1.0
+HOUSE_LX = 5.0
+HOUSE_LY = 4.0
+HOUSE_T  = 1.5
+
+OFFSET = 3.0
+BAND_THICKNESS = HOUSE_H / 5.0
+
+SOURCES = [
+    {"pos": (-3.0,  1.5, 0.0), "type": "press", "radius": 2.8, "amp": 1.0},  # 主人：凹
+    {"pos": ( 3.5, -2.0, 0.0), "type": "push",  "radius": 2.5, "amp": 1.0},  # 外人：凸
+]
+MAX_RAISE = 1.0
+
+OBJ_PATH = "band_L_house.obj"
+
+
+# =========================================================
+# HELPERS (L union + offset)
+# =========================================================
+def build_L_rects(lx, ly, t):
+    sx = lx * 0.5
+    sy = ly * 0.5
+    rectA = (0 - sx, 0 - sy, lx - sx, t - sy)
+    rectB = (0 - sx, 0 - sy, t  - sx, ly - sy)
+    return rectA, rectB
+
+def expand_rect(rect, d):
+    xmin, ymin, xmax, ymax = rect
+    return (xmin - d, ymin - d, xmax + d, ymax + d)
+
+def point_in_rect(x, y, rect):
+    xmin, ymin, xmax, ymax = rect
+    return (xmin <= x <= xmax) and (ymin <= y <= ymax)
+
+def point_in_union_L(x, y, rectA, rectB):
+    return point_in_rect(x, y, rectA) or point_in_rect(x, y, rectB)
+
+def bbox_of_union(rects):
+    xs = [r[0] for r in rects] + [r[2] for r in rects]
+    ys = [r[1] for r in rects] + [r[3] for r in rects]
+    return (min(xs), min(ys), max(xs), max(ys))
+
+
+# =========================================================
+# BUILD BAND MESH (grid only in outer bbox)
+# =========================================================
+def make_band_mesh_L(lx, ly, t, offset, nx, ny):
+    rectA, rectB = build_L_rects(lx, ly, t)
+    innerA, innerB = rectA, rectB
+    outerA = expand_rect(rectA, offset)
+    outerB = expand_rect(rectB, offset)
+
+    xmin, ymin, xmax, ymax = bbox_of_union([outerA, outerB])
+
+    verts = []
+    for j in range(ny + 1):
+        y = ymin + (ymax - ymin) * (j / ny)
+        for i in range(nx + 1):
+            x = xmin + (xmax - xmin) * (i / nx)
+            verts.append([x, y, 0.0])
+
+    faces = []
+    for j in range(ny):
+        for i in range(nx):
+            a = i + j * (nx + 1)
+            b = a + 1
+            c = b + (nx + 1)
+            d = a + (nx + 1)
+            faces.append([a, b, c, d])
+
+    kept = []
+    for f in faces:
+        cx = sum(verts[k][0] for k in f) / 4.0
+        cy = sum(verts[k][1] for k in f) / 4.0
+        in_outer = point_in_union_L(cx, cy, outerA, outerB)
+        in_inner = point_in_union_L(cx, cy, innerA, innerB)
+        if in_outer and (not in_inner):
+            kept.append(f)
+
+    used = sorted({k for f in kept for k in f})
+    remap = {old: new for new, old in enumerate(used)}
+    new_verts = [verts[i] for i in used]
+    new_faces = [[remap[k] for k in f] for f in kept]
+
+    return Mesh.from_vertices_and_faces(new_verts, new_faces)
+
+
+# =========================================================
+# HOUSE MESH (L polygon prism)
+# =========================================================
+def make_L_house_mesh(lx, ly, t, height, z0=0.0):
+    sx = lx * 0.5
+    sy = ly * 0.5
+    poly = [
+        (0 - sx,   0 - sy),
+        (lx - sx,  0 - sy),
+        (lx - sx,  t - sy),
+        (t - sx,   t - sy),
+        (t - sx,   ly - sy),
+        (0 - sx,   ly - sy),
+    ]
+    Vb = [[x, y, z0] for x, y in poly]
+    Vt = [[x, y, z0 + height] for x, y in poly]
+    V = Vb + Vt
+    n = len(poly)
+
+    bottom = list(range(0, n))
+    top = list(range(n, 2*n))
+
+    F = []
+    F.append(list(reversed(bottom)))
+    F.append(top)
+    for i in range(n):
+        i2 = (i + 1) % n
+        F.append([i, i2, n + i2, n + i])
+
+    return Mesh.from_vertices_and_faces(V, F)
+
+
+# =========================================================
+# DEFORM TOP (2 sources: press/push)  Z only
+# =========================================================
+def deform_top_Z(ring_top, sources, max_raise=1.0):
+    for vkey in ring_top.vertices():
+        x, y, z0 = ring_top.vertex_coordinates(vkey)
+        dz = 0.0
+        for src in sources:
+            px, py, pz = src["pos"]
+            r = float(src.get("radius", 2.5))
+            amp = float(src.get("amp", 1.0))
+            typ = src.get("type", "push")
+
+            dx = x - px
+            dy = y - py
+            d = math.sqrt(dx*dx + dy*dy)
+            if r <= 0 or d >= r:
+                continue
+
+            t = 1.0 - (d / r)
+            if typ == "push":
+                dz += t * amp * max_raise
+            elif typ == "press":
+                dz -= t * amp * max_raise
+
+        ring_top.vertex_attribute(vkey, "z", z0 + dz)
+    return ring_top
+
+
+# =========================================================
+# THICKEN SOLID with FLAT BOTTOM
+# =========================================================
+def thicken_flat_bottom(ring_top, ring_base, thickness):
+    t = float(thickness)
+    if t <= 0:
+        return ring_top
+
+    solid = Mesh()
+
+    top_map = {}
+    for v in ring_top.vertices():
+        x, y, z = ring_top.vertex_coordinates(v)
+        top_map[v] = solid.add_vertex(x=x, y=y, z=z)
+
+    bot_map = {}
+    for v in ring_base.vertices():
+        x, y, z = ring_base.vertex_coordinates(v)  # z=0
+        bot_map[v] = solid.add_vertex(x=x, y=y, z=z - t)
+
+    for f in ring_top.faces():
+        face = ring_top.face_vertices(f)
+        solid.add_face([top_map[v] for v in face])
+
+    for f in ring_base.faces():
+        face = ring_base.face_vertices(f)
+        solid.add_face([bot_map[v] for v in reversed(face)])
+
+    for u, v in ring_base.edges():
+        f1 = ring_base.halfedge[u][v]
+        f2 = ring_base.halfedge[v][u]
+        if f1 is None or f2 is None:
+            solid.add_face([top_map[u], top_map[v], bot_map[v], bot_map[u]])
+
+    return solid
+
+
+# =========================================================
+# EXPORT OBJ (no viewer dependency)
+# =========================================================
+def export_obj(meshes, path):
+    lines = []
+    v_offset = 0
+
+    for mesh, name in meshes:
+        lines.append(f"o {name}")
+        vkeys = list(mesh.vertices())
+        index = {vk: i for i, vk in enumerate(vkeys)}
+
+        for vk in vkeys:
+            x, y, z = mesh.vertex_coordinates(vk)
+            lines.append(f"v {x:.6f} {y:.6f} {z:.6f}")
+
+        for fkey in mesh.faces():
+            vs = mesh.face_vertices(fkey)
+
+            if len(vs) == 3:
+                a, b, c = vs
+                lines.append(f"f {v_offset+index[a]+1} {v_offset+index[b]+1} {v_offset+index[c]+1}")
+
+            elif len(vs) == 4:
+                a, b, c, d = vs
+                lines.append(f"f {v_offset+index[a]+1} {v_offset+index[b]+1} {v_offset+index[c]+1}")
+                lines.append(f"f {v_offset+index[a]+1} {v_offset+index[c]+1} {v_offset+index[d]+1}")
+
+            else:
+                a = vs[0]
+                for i in range(1, len(vs)-1):
+                    b = vs[i]
+                    c = vs[i+1]
+                    lines.append(f"f {v_offset+index[a]+1} {v_offset+index[b]+1} {v_offset+index[c]+1}")
+
+        v_offset += len(vkeys)
+
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+
+
+# =========================================================
+# MAIN
+# =========================================================
+ring_base = make_band_mesh_L(HOUSE_LX, HOUSE_LY, HOUSE_T, OFFSET, NX, NY)
+ring_top = copy.deepcopy(ring_base)
+ring_top = deform_top_Z(ring_top, SOURCES, MAX_RAISE)
+ring_solid = thicken_flat_bottom(ring_top, ring_base, BAND_THICKNESS)
+
+house = make_L_house_mesh(HOUSE_LX, HOUSE_LY, HOUSE_T, HOUSE_H, z0=0.0)
+
+print("Band base | verts:", ring_base.number_of_vertices(), "faces:", ring_base.number_of_faces())
+print("Band solid| verts:", ring_solid.number_of_vertices(), "faces:", ring_solid.number_of_faces())
+print("House     | verts:", house.number_of_vertices(), "faces:", house.number_of_faces())
+
+out_abs = os.path.abspath(OBJ_PATH)
+export_obj([(ring_solid, "band_solid"), (house, "house_L")], OBJ_PATH)
+print("✅ Exported OBJ:", out_abs)
+print("👉 用 Rhino: File > Import，把這個 .obj 匯入就看得到")

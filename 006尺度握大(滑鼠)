@@ -1,0 +1,90 @@
+import pygame
+import random
+import math
+
+pygame.init()
+WIDTH, HEIGHT = 800, 600
+screen = pygame.display.set_mode((WIDTH, HEIGHT))
+pygame.display.set_caption("3D Mesh Viewer")
+
+clock = pygame.time.Clock()
+running = True
+
+balls = []
+radius = 5
+cols = 48
+rows = 34
+spacing = 15
+offset_x = WIDTH - 50
+offset_y = HEIGHT - 50
+
+for j in range(rows):
+    y = offset_y - j * spacing
+    for i in range(cols):
+        x = offset_x - i * spacing
+        balls.append({
+            "x": x,
+            "y": y,
+            "ix": x,
+            "iy": y,
+            "vx": 0.0,
+            "vy": 0.0,
+        })
+
+influence_radius = 150
+repel_strength = 5
+damping = 0.4
+spring_strength = 0.2
+
+while running:
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            running = False
+
+    screen.fill((255, 255, 255))
+
+    mx, my = pygame.mouse.get_pos()
+
+
+    pygame.draw.circle(screen,(255,0,0),(mx,my),25)
+
+    for b in balls:
+        dx = b["x"] - mx
+        dy = b["y"] - my
+        dist_sq = dx*dx + dy*dy
+
+        if 0 < dist_sq < influence_radius**2:
+            dist = math.sqrt(dist_sq)
+            repel = repel_strength * (influence_radius - dist) / influence_radius
+            b["vx"] += (dx/dist) * repel
+            b["vy"] += (dy/dist) * repel
+    
+    for b in balls:
+        b["vx"] += (b["ix"] - b["x"]) * spring_strength
+        b["vy"] += (b["iy"] - b["y"]) * spring_strength
+
+    for b in balls:
+        b["vx"] *= damping
+        b["vy"] *= damping
+
+        b["x"] += b["vx"]
+        b["y"] += b["vy"]
+
+    for index, b in enumerate(balls):
+        bx, by = b["x"], b["y"]
+
+        if (index + 1) % cols != 0:     
+            nb = balls[index + 1]
+            pygame.draw.line(screen,(180,180,180),(bx,by),(nb["x"],nb["y"]),1)
+
+        if index + cols < len(balls):   
+            nb = balls[index + cols]
+            pygame.draw.line(screen,(180,180,180),(bx,by),(nb["x"],nb["y"]),1)
+
+    for b in balls:
+        pygame.draw.circle(screen,(0,0,0),(int(b["x"]),int(b["y"])),radius)
+
+    pygame.display.flip()
+    clock.tick(60)
+
+pygame.quit()

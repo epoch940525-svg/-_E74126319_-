@@ -1,0 +1,106 @@
+from compas.datastructures import Mesh
+from compas.geometry import Point
+from compas_viewer import Viewer
+
+
+OUTER_SIZE = 10.0   # 外正方形邊長
+INNER_SIZE = 4.0    # 內挖空正方形邊長（洞）
+NX = 70             # 網格密度（x）
+NY = 70             # 網格密度（y）
+
+HOUSE_SIZE = 1.0    # 中心房子方塊大小
+HOUSE_Z0 = 0.0      # 房子底部高度
+
+P = (4.5, 0.0, 0.0) # 噪音源位置
+noise_level = 1.0   # 噪音強度
+radius = 2.5        # 影響半徑
+max_raise = 1.0     # 最大隆起高度
+
+def make_square_ring_mesh(outer=10.0, inner=4.0, nx=70, ny=70):
+    """Create a square ring mesh: outer square - inner square hole."""
+
+    ox = outer * 0.5
+    oy = outer * 0.5
+    hx = inner * 0.5
+    hy = inner * 0.5
+
+    # 1) vertices on a grid in [-outer/2, outer/2]
+    vertices = []
+    for j in range(ny + 1):
+        y = -oy + (2.0 * oy) * (j / ny)
+        for i in range(nx + 1):
+            x = -ox + (2.0 * ox) * (i / nx)
+            vertices.append([x, y, 0.0])
+
+    # 2) quad faces
+    faces = []
+    for j in range(ny):
+        for i in range(nx):
+            a = i + j * (nx + 1)
+            b = a + 1
+            c = b + (nx + 1)
+            d = a + (nx + 1)
+            faces.append([a, b, c, d])
+
+    # 3) keep only faces whose centroid is OUTSIDE the inner square
+    kept_faces = []
+    for f in faces:
+        cx = sum(vertices[k][0] for k in f) / 4.0
+        cy = sum(vertices[k][1] for k in f) / 4.0
+        inside_hole = (abs(cx) < hx) and (abs(cy) < hy)
+        if not inside_hole:
+            kept_faces.append(f)
+
+    # 4) compact vertices (remove unused)
+    used = sorted({k for f in kept_faces for k in f})
+    remap = {old: new for new, old in enumerate(used)}
+
+    new_vertices = [vertices[i] for i in used]
+    new_faces = [[remap[k] for k in f] for f in kept_faces]
+
+    return Mesh.from_vertices_and_faces(new_vertices, new_faces)
+
+
+def make_box_mesh(size=1.0, z0=0.0):
+    """Create a box mesh centered at origin, sitting on z0."""
+
+    s = size * 0.5
+    z1 = z0 + size
+
+    vertices = [
+        [-s, -s, z0],  # 0
+        [ s, -s, z0],  # 1
+        [ s,  s, z0],  # 2
+        [-s,  s, z0],  # 3
+        [-s, -s, z1],  # 4
+        [ s, -s, z1],  # 5
+        [ s,  s, z1],  # 6
+        [-s,  s, z1],  # 7
+    ]
+
+    faces = [
+        [0, 1, 2, 3],  # bottom
+        [4, 5, 6, 7],  # top
+        [0, 1, 5, 4],  # side
+        [1, 2, 6, 5],  # side
+        [2, 3, 7, 6],  # side
+        [3, 0, 4, 7],  # side
+    ]
+
+    return Mesh.from_vertices_and_faces(vertices, faces)
+
+
+ring = make_square_ring_mesh(outer=OUTER_SIZE, inner=INNER_SIZE, nx=NX, ny=NY)
+house = make_box_mesh(size=HOUSE_SIZE, z0=HOUSE_Z0)
+
+print("Ring  | vertices:", ring.number_of_vertices(), "faces:", ring.number_of_faces())
+print("House | vertices:", house.number_of_vertices(), "faces:", house.number_of_faces())
+print("Noise source P:", P)
+
+
+viewer = Viewer()
+viewer.scene.add(ring, name="ring", show_faces=True, show_edges=True)
+viewer.scene.add(house, name="house", show_faces=True, show_edges=True)
+viewer.scene.add(Point(*P), name="noise_source")
+
+viewer.show()

@@ -1,0 +1,82 @@
+import pygame
+pygame.init()
+WIDTH, HEIGHT = 800, 600
+screen = pygame.display.set_mode((WIDTH, HEIGHT))
+pygame.display.set_caption("3D Mesh Viewer")
+#創造一個視窗介面 大小為800*600
+
+clock = pygame.time.Clock()
+running = True
+
+balls = []
+radius = 10
+cols = 22
+rows = 14
+spacing = 30
+offset_x = WIDTH - 100
+offset_y = HEIGHT - 100
+for j in range(rows):
+    y = offset_y - j * spacing
+    for i in range(cols):
+        x = offset_x - i * spacing
+        balls.append({      #把數值寫入append
+                "x": x,
+                "y": y,
+                "ix": x,
+                "iy": y,
+                "vx": 0.0,
+                "vy": 0.0,
+        })
+#球存入列表
+
+influence_radius = 150
+repel_strength = 4
+damping = 0.8
+
+while running:
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            running = False
+
+    screen.fill((255, 255, 255))
+    
+    mouse_x, mouse_y = pygame.mouse.get_pos()
+    #使用滑鼠
+    pygame.draw.circle(screen, (255, 0, 0), (mouse_x, mouse_y), 35)
+    #球在滑鼠上
+
+    for b in balls:
+        dx = b["x"] - mouse_x
+        dy = b["y"] - mouse_y
+        dist_sq = dx * dx + dy * dy
+        if dist_sq < influence_radius * influence_radius:
+            dist = dist_sq ** 0.5
+            if dist > 0:
+                repel_force = repel_strength * (influence_radius - dist) / influence_radius
+                b["vx"] += (dx / dist) * repel_force
+                b["vy"] += (dy / dist) * repel_force
+                #計算排斥阻力
+    
+    for b in balls:
+        b["vx"] *= damping
+        b["vy"] *= damping
+        b["x"] += b["vx"]
+        b["y"] += b["vy"]
+        #更新位置
+    
+    spring_strength = 0.02
+    for b in balls:
+        b["vx"] += (b["ix"] - b["x"]) * spring_strength
+        b["vy"] += (b["iy"] - b["y"]) * spring_strength
+        #彈簧力
+
+    for b in balls:
+        pygame.draw.circle(screen, (0, 0, 0), (int(b["x"]), int(b["y"])), radius)
+        #畫球
+
+    pygame.display.flip()
+    clock.tick(60)
+
+pygame.quit()
+
+
