@@ -4,9 +4,8 @@ import copy
 import os
 
 
-# =========================================================
 # PARAMETERS
-# =========================================================
+
 NX = 55
 NY = 55
 
@@ -26,10 +25,8 @@ MAX_RAISE = 1.0
 
 OBJ_PATH = "band_L_house.obj"
 
+# HELPERS 
 
-# =========================================================
-# HELPERS (L union + offset)
-# =========================================================
 def build_L_rects(lx, ly, t):
     sx = lx * 0.5
     sy = ly * 0.5
@@ -53,10 +50,8 @@ def bbox_of_union(rects):
     ys = [r[1] for r in rects] + [r[3] for r in rects]
     return (min(xs), min(ys), max(xs), max(ys))
 
+# BUILD BAND MESH
 
-# =========================================================
-# BUILD BAND MESH (grid only in outer bbox)
-# =========================================================
 def make_band_mesh_L(lx, ly, t, offset, nx, ny):
     rectA, rectB = build_L_rects(lx, ly, t)
     innerA, innerB = rectA, rectB
@@ -97,10 +92,8 @@ def make_band_mesh_L(lx, ly, t, offset, nx, ny):
 
     return Mesh.from_vertices_and_faces(new_verts, new_faces)
 
-
-# =========================================================
 # HOUSE MESH (L polygon prism)
-# =========================================================
+
 def make_L_house_mesh(lx, ly, t, height, z0=0.0):
     sx = lx * 0.5
     sy = ly * 0.5
@@ -129,10 +122,8 @@ def make_L_house_mesh(lx, ly, t, height, z0=0.0):
 
     return Mesh.from_vertices_and_faces(V, F)
 
-
-# =========================================================
 # DEFORM TOP (2 sources: press/push)  Z only
-# =========================================================
+
 def deform_top_Z(ring_top, sources, max_raise=1.0):
     for vkey in ring_top.vertices():
         x, y, z0 = ring_top.vertex_coordinates(vkey)
@@ -158,10 +149,8 @@ def deform_top_Z(ring_top, sources, max_raise=1.0):
         ring_top.vertex_attribute(vkey, "z", z0 + dz)
     return ring_top
 
-
-# =========================================================
 # THICKEN SOLID with FLAT BOTTOM
-# =========================================================
+
 def thicken_flat_bottom(ring_top, ring_base, thickness):
     t = float(thickness)
     if t <= 0:
@@ -195,10 +184,8 @@ def thicken_flat_bottom(ring_top, ring_base, thickness):
 
     return solid
 
-
-# =========================================================
 # EXPORT OBJ (no viewer dependency)
-# =========================================================
+
 def export_obj(meshes, path):
     lines = []
     v_offset = 0
@@ -236,10 +223,8 @@ def export_obj(meshes, path):
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
 
-
-# =========================================================
 # MAIN
-# =========================================================
+
 ring_base = make_band_mesh_L(HOUSE_LX, HOUSE_LY, HOUSE_T, OFFSET, NX, NY)
 ring_top = copy.deepcopy(ring_base)
 ring_top = deform_top_Z(ring_top, SOURCES, MAX_RAISE)
@@ -253,5 +238,5 @@ print("House     | verts:", house.number_of_vertices(), "faces:", house.number_o
 
 out_abs = os.path.abspath(OBJ_PATH)
 export_obj([(ring_solid, "band_solid"), (house, "house_L")], OBJ_PATH)
-print("✅ Exported OBJ:", out_abs)
-print("👉 用 Rhino: File > Import，把這個 .obj 匯入就看得到")
+print("Exported OBJ:", out_abs)
+print(" 用 Rhino: File > Import，把這個 .obj 匯入就看得到")
