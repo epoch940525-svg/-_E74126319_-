@@ -6,9 +6,7 @@ import math
 import copy
 
 
-# =========================================================
 # PARAMETERS
-# =========================================================
 OUTER_SIZE = 10.0
 INNER_SIZE = 4.0
 NX = 70
@@ -21,10 +19,8 @@ HOUSE_Z0 = 0.0
 RING_THICKNESS = HOUSE_SIZE / 5.0
 
 
-# ---------------------------------------------------------
 # TWO SOURCES ONLY
-# ---------------------------------------------------------
-# 主人 = 凹（press）
+# 主人= 凹（press）
 # 外人 = 凸（push）
 SOURCES = [
     {
@@ -47,9 +43,8 @@ noise_level = 1.0
 max_raise = 1.0
 
 
-# =========================================================
 # GEOMETRY
-# =========================================================
+
 def make_square_ring_mesh(outer, inner, nx, ny):
     ox = outer * 0.5
     oy = outer * 0.5
@@ -100,9 +95,8 @@ def make_box_mesh(size, z0):
     return Mesh.from_vertices_and_faces(vertices, faces)
 
 
-# =========================================================
 # DEFORMATION: OWNER (凹) / VISITOR (凸)
-# =========================================================
+
 def deform_ring_identity(ring, sources):
     for v in ring.vertices():
         x, y, z0 = ring.vertex_coordinates(v)
@@ -131,10 +125,8 @@ def deform_ring_identity(ring, sources):
 
     return ring
 
-
-# =========================================================
 # THICKENING (flat bottom, stretched sides)
-# =========================================================
+
 def thicken_flat(ring_top, ring_base, thickness):
     solid = Mesh()
 
@@ -160,20 +152,16 @@ def thicken_flat(ring_top, ring_base, thickness):
 
     return solid
 
-
-# =========================================================
 # BUILD
-# =========================================================
+
 ring_base = make_square_ring_mesh(OUTER_SIZE, INNER_SIZE, NX, NY)
 ring_top  = deform_ring_identity(copy.deepcopy(ring_base), SOURCES)
 ring_solid = thicken_flat(ring_top, ring_base, RING_THICKNESS)
 
 house = make_box_mesh(HOUSE_SIZE, HOUSE_Z0)
 
-
-# =========================================================
 # VIEW
-# =========================================================
+
 viewer = Viewer()
 viewer.scene.add(ring_solid, name="ground", show_faces=True, show_edges=True)
 viewer.scene.add(house, name="house", show_faces=True, show_edges=True)
